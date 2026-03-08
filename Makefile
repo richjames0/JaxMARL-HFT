@@ -17,7 +17,7 @@ else
 DATADIR=~/data_local/data
 endif
 SCRATCH_DIR=~/scratch_LOB
-BASE_FLAGS=-it --rm -v ${PWD}:/home/$(MYUSER) -v $(DATADIR):/home/$(MYUSER)/data -v $(SCRATCH_DIR):/home/$(MYUSER)/scratch --shm-size 20G
+BASE_FLAGS=-it --rm -e WANDB_API_KEY -v ${PWD}:/home/$(MYUSER) -v $(DATADIR):/home/$(MYUSER)/data -v $(SCRATCH_DIR):/home/$(MYUSER)/scratch --shm-size 20G
 PORT_FLAGS= -p 8077:80 -p 8076:6006
 RUN_FLAGS=$(GPUS) $(BASE_FLAGS) $(PORT_FLAGS)
 BASIC_FLAGS=$(GPUS) $(BASE_FLAGS)
