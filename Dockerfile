@@ -29,9 +29,9 @@ FROM nvcr.io/nvidia/jax:25.10-py3
 ARG UID
 ARG MYUSER
 RUN useradd -m -u $UID --create-home ${MYUSER} && \
-    echo "${MYUSER}: ${MYUSER}" | chpasswd && \
+    echo "${MYUSER}:${MYUSER}" | chpasswd && \
     adduser ${MYUSER} sudo && \
-    chown -R  ${MYUSER}:${MYUSER} /home/${MYUSER}
+    chown -R ${MYUSER}:${MYUSER} /home/${MYUSER}
 
 # default workdir
 WORKDIR /home/${MYUSER}/
@@ -70,8 +70,6 @@ ENV TF_FORCE_GPU_ALLOW_GROWTH=true
 # Ensure repo root is on the Python path
 ENV PYTHONPATH="/home/${MYUSER}:$PYTHONPATH"
 
-# WandB credentials — set these via environment variables when running
-# e.g. docker run -e WANDB_API_KEY=<key> -e WANDB_ENTITY=<entity> ...
-ENV WANDB_API_KEY=""
-ENV WANDB_ENTITY=""
+# WandB credentials — pass API key via environment variable when running:
+# e.g. docker run -e WANDB_API_KEY=<key> ...
 RUN git config --global --add safe.directory /home/${MYUSER}
