@@ -253,11 +253,12 @@ class LoadLOBSTER():
         
         # Adaptive worker count based on file size and system resources
         total_files = len(self.message_files)
-        
-        # Start with fewer workers and scale based on system performance
-        base_workers = min(mp.cpu_count() // 4, 8)  # Conservative start
-        n_workers = min(base_workers, total_files, 16)  # Cap at 16 to avoid thrashing
-        
+        if total_files == 0:
+            raise FileNotFoundError(f"No data files found in {self.datapaths}. Check that dataPath, stock, and timePeriod are correct in your env config.")
+
+        base_workers = max(mp.cpu_count() // 4, 1)
+        n_workers = min(base_workers, total_files, 16)
+
         print(f"Using {n_workers} workers for parallel loading ({total_files} files)")
         
         # Semaphore to limit concurrent file operations (prevent disk thrashing)
@@ -741,8 +742,8 @@ class LoadLOBSTER_resample():
         
         # Start with fewer workers and scale based on system performance
         # I/O bound tasks benefit from more workers, but too many cause contention
-        base_workers = min(mp.cpu_count() // 4, 8)  # Conservative start
-        n_workers = min(base_workers, total_files, 16)  # Cap at 16 to avoid thrashing
+        base_workers = max(mp.cpu_count() // 4, 1)
+        n_workers = min(base_workers, total_files, 16)
         
         print(f"Using {n_workers} workers for parallel loading ({total_files} files)")
         
