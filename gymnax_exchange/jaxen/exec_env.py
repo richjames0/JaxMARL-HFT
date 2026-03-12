@@ -149,15 +149,6 @@ class ExecutionAgent():
         self.cfg=cfg
         self.world_config = world_config
 
-         #----------------- Set the end function -----------------#
-        # if self.cfg.end_fn=="force_market_order":
-        #     self.end_fn =self._force_market_order_if_done
-        # elif self.cfg.end_fn=="unwind_FT":
-        #     self.end_fn=self.unwind_FT
-        #else:
-        #     raise ValueError(f"Unknown end function: {self.cfg.end_fn}")
-        #---------------------------------------------------------#
-
         #----------------- Set the action function -----------------#
         if self.cfg.action_space == "fixed_quants":
             self.action_fn = self._getActionMsgs_fixedQuant
@@ -171,6 +162,8 @@ class ExecutionAgent():
             self.action_fn = self._getActionMsgs_fixedQuant_1msg
         elif self.cfg.action_space == "twap":
             self.action_fn = self._getActionMsgs_twap
+        elif self.cfg.action_space == "execute_hold":
+            self.action_fn = self._getActionMsgs_executeHold
         else:
             raise ValueError("Invalid action_space specified.")
 
@@ -238,6 +231,8 @@ class ExecutionAgent():
             vwap_rm = 0.,
             is_sell_task = is_sell_task,
             trade_duration = 0.,
+            market_vwap_num = 0.,
+            market_vwap_den = 0.,
         )
 
         # Calculate things for the message obs space
@@ -270,145 +265,6 @@ class ExecutionAgent():
     def is_terminal(self, world_state: WorldState, agent_state: ExecEnvState) -> bool:
         """ Check whether state is terminal. """
         return (agent_state.task_to_execute - agent_state.quant_executed <= 0)
-        # if self.world_config.ep_type == 'fixed_time':
-        #     #jax.debug.print("params_episode_time:{}",self.world_config.episode_time)
-        #     #jax.debug.print("time:{}",state.time)
-            
-        #     #jax.debug.print("init_time:{}",state.init_time)
-        #     # TODO: make the 5 sec a function of the step size
-        #     # time_done = (self.world_config.episode_time - (world_state.time - world_state.init_time)[0] <= self.cfg.seconds_before_episode_end)  # time over (last 5 seconds)
-        #     task_done = (agent_state.task_to_execute - agent_state.quant_executed <= 0)
-        #     # done = time_done | task_done
-        #     def done_callback(world_state, agent_state, done,time_done, task_done):
-        #         if done:
-        #             print(f"Episode done: time_done {time_done}, task_done {task_done}")
-        #             print(f"Window Index: {world_state.window_index}")
-        #             if time_done:
-        #                 print("Episode done: time over, last 5 seconds")
-        #                 print(f"Seconds before episode end: {self.cfg.seconds_before_episode_end}")
-        #                 print(f"Episode time: {self.world_config.episode_time}")
-        #                 print(f"Time Elapsed: {(world_state.time - world_state.init_time)[0]}")
-        #                 print(f"Time : {world_state.time}")
-        #                 print(f"Init Time : {world_state.init_time}")
-        #             if task_done:
-        #                 print("Episode done: task done")
-        #                 print(f"Task to execute: {agent_state.task_to_execute}")
-        #                 print(f"Quant executed: {agent_state.quant_executed}")
-
-        #     # jax.debug.callback(done_callback, world_state, agent_state, done, time_done, task_done)
-        #     return task_done
-        
-        # elif self.world_config.ep_type == 'fixed_steps':
-        #     #jax.debug.print(f"done exec step: {world_state.max_steps_in_episode - world_state.step_counter <= 1}")
-        #     #jax.debug.print(f"done exec task: {agent_state.task_to_execute - agent_state.quant_executed <= 0}")
-        #     return (
-        #         (world_state.max_steps_in_episode - world_state.step_counter <= 1)  # last step
-        #         |  (agent_state.task_to_execute - agent_state.quant_executed <= 0)  # task done
-        #     )
-        # else:
-        #     raise ValueError(f"Unknown episode type: {self.world_config.ep_type}")
-
-    # def _get_pass_price_quant(self, orders, best_ask_p, best_bid_p, is_sell_task):
-    #     price_passive_2 = jax.lax.cond(
-    #         is_sell_task,
-    #         lambda: best_ask_p + self.world_config.tick_size*self.n_ticks_in_book,
-    #         lambda: best_bid_p - self.world_config.tick_size*self.n_ticks_in_book
-    #     )
-    #     # quantity at second passive price level in the book
-    #     quant_passive_2 = job.get_volume_at_price(orders, price_passive_2)
-    #     return price_passive_2, quant_passive_2
-    
-    # def _get_pass_price_quant(self, state):
-    #     price_passive_2 = jax.lax.cond(
-    #         state.is_sell_task,
-    #         lambda: state.best_asks[-1, 0] + self.world_config.tick_size * self.cfg.n_ticks_in_book,
-    #         lambda: state.best_bids[-1, 0] - self.world_config.tick_size * self.cfg.n_ticks_in_book
-    #     )
-    #     orders = jax.lax.cond(
-    #         state.is_sell_task,
-    #         lambda: state.ask_raw_orders,
-    #         lambda: state.bid_raw_orders
-    #     )
-    #     # quantity at second passive price level in the book
-    #     quant_passive_2 = job.get_volume_at_price(orders, price_passive_2)
-    #     return price_passive_2, quant_passive_2
-    
-    # def _get_state_from_data(self,key,first_message,book_data,max_steps_in_episode,window_index,start_index):
-    #     #(self,message_data,book_data,max_steps_in_episode)
-    #     base_state = super()._get_state_from_data(key,first_message, book_data, max_steps_in_episode, window_index, start_index)
-    #     base_vals = jtu.tree_flatten(base_state)[0]
-    #     best_bid, best_ask = job.get_best_bid_and_ask_inclQuants(self.cfg,base_state.ask_raw_orders,base_state.bid_raw_orders)
-    #     M = (best_bid[0] + best_ask[0]) // 2 // self.world_config.tick_size * self.world_config.tick_size 
-    #     # if task is 'random', this will be randomly picked at env reset
-    #     is_sell_task = 0 if self.cfg.task == 'buy' else 1 # if self.cfg.task == 'random', set defualt as 0
-    #     # HERE...
-    #     n_trades=self.cfg.num_action_messages_by_agent
-    #     return ExecEnvState(
-    #         *base_vals,
-    #         prev_action=jnp.zeros((n_trades, 2), jnp.int32),
-    #         prev_executed=jnp.zeros((n_trades, ), jnp.int32),
-    #         best_asks=jnp.resize(best_ask,(self.n_data_msg_per_step,2)),
-    #         best_bids=jnp.resize(best_bid,(self.n_data_msg_per_step,2)),
-    #         init_price=M,
-    #         task_to_execute=self.cfg.task_size,
-    #         quant_executed=0,
-    #         total_revenue=0.,
-    #         drift_return=0.,
-    #         advantage_return=0.,
-    #         slippage_rm=0.,
-    #         price_adv_rm=0.,
-    #         price_drift_rm=0.,
-    #         vwap_rm=0.,
-    #         is_sell_task=is_sell_task, # updated on reset
-    #         trade_duration=0.,
-    #         # updated on reset:
-    #         delta_time=0.,
-    #     )
-
-    # def _reshape_action(self, action : jax.Array, state: ExecEnvState, params : ExecEnvParams, key:chex.PRNGKey) -> jax.Array:
-    #     def twapV3(state, env_params):
-    #         # ---------- ifMarketOrder ----------
-    #         remainingTime = self.world_config.episode_time - jnp.array((state.time-state.init_time)[0], dtype=jnp.int32)
-    #         marketOrderTime = jnp.array(60, dtype=jnp.int32) # in seconds, means the last minute was left for market order
-    #         ifMarketOrder = (remainingTime <= marketOrderTime)
-    #         # print(f"{i} remainingTime{remainingTime} marketOrderTime{marketOrderTime}")
-    #         # ---------- ifMarketOrder ----------
-    #         # ---------- quants ----------
-    #         remainedQuant = state.task_to_execute - state.quant_executed
-    #         remainedStep = state.max_steps_in_episode - state.step_counter
-    #         stepQuant = jnp.ceil(remainedQuant/remainedStep).astype(jnp.int32) # for limit orders
-    #         limit_quants = jax.random.permutation(key, jnp.array([stepQuant-stepQuant//2,stepQuant//2]), independent=True)
-    #         market_quants = jnp.array([stepQuant,stepQuant])
-    #         quants = jnp.where(ifMarketOrder,market_quants,limit_quants)
-    #         # ---------- quants ----------
-    #         return jnp.array(quants) 
-
-    #     def truncate_action(action, remainQuant):
-    #         action = jnp.round(action).clip(0, remainQuant).astype(jnp.int32)
-    #         # scaledAction = utils.clip_by_sum_int(action, remainQuant)
-    #         scaledAction = jnp.where(
-    #             action.sum() <= remainQuant,
-    #             action,
-    #             utils.hamilton_apportionment_permuted_jax(action, remainQuant, key)
-    #         ).astype(jnp.int32)
-    #         return scaledAction
-
-    #     ##----Only truncate for the non fixed quants, this is handled in action space for fixed quants
-    #     if self.cfg.action_space=="fixed_prices":
-    #         #Only do delta for non fixed quants
-    #         if self.cfg.action_type == 'delta':
-    #             action = twapV3(state, params) + action
-    #         action = truncate_action(action, state.task_to_execute - state.quant_executed)
-    #     elif self.cfg.action_space=="fixed_quants":
-    #         action=action
-    #     elif self.cfg.action_space=="fixed_quants_complex":
-    #         action=action
-    #     else:
-    #         raise ValueError("Invalid Action Space")
-        
-    #     # jax.debug.print("base_ {}, delta_ {}, action_ {}; action {}",base_, delta_,action_,action)
-    #     # jax.debug.print("action {}", action)
-    #     return action
       
     def _filter_messages(
             self, 
@@ -998,6 +854,36 @@ class ExecutionAgent():
         return action_msgs,{}
 
     
+    def _getActionMsgs_executeHold(self, action: jax.Array, world_state: WorldState, agent_state: ExecEnvState, agent_params: ExecEnvParams):
+        """Binary execute/hold action space: 0=HOLD, 1=EXECUTE at far touch.
+        Single message per step — simplified from simplest_case.
+        """
+        best_ask = jnp.int32((world_state.best_asks[-1][0] // self.world_config.tick_size) * self.world_config.tick_size)
+        best_bid = jnp.int32((world_state.best_bids[-1][0] // self.world_config.tick_size) * self.world_config.tick_size)
+
+        ft_price = jax.lax.cond(
+            agent_state.is_sell_task,
+            lambda: best_bid,
+            lambda: best_ask,
+        )
+
+        quant = jnp.where(action == 1, self.cfg.fixed_quant_value, 0).astype(jnp.int32)
+        quant_left = agent_state.task_to_execute - agent_state.quant_executed
+        quant = jnp.minimum(quant, quant_left)
+
+        types = jnp.ones((1,), jnp.int32)
+        sides = (1 - agent_state.is_sell_task * 2) * jnp.ones((1,), jnp.int32)
+        trader_ids = jnp.ones((1,), jnp.int32) * agent_params.trader_id
+        order_ids = jnp.full((1,), self.world_config.placeholder_order_id, dtype=jnp.int32)
+        times = jnp.resize(world_state.time + self.cfg.time_delay_obs_act, (1, 2))
+        quants = jnp.array([quant])
+        prices = jnp.array([ft_price])
+
+        action_msgs = jnp.stack([types, sides, quants, prices, order_ids, trader_ids], axis=1)
+        action_msgs = jnp.concatenate([action_msgs, times], axis=1)
+        return action_msgs, {}
+
+
     def _getActionMsgs_fixedPrice(self, action: jax.Array, world_state: WorldState, agent_state: ExecEnvState, agent_params: ExecEnvParams):
         """get messages for action space where input is quantity at each price level"""
         action = jnp.atleast_1d(action)
@@ -1278,16 +1164,6 @@ class ExecutionAgent():
 
 
     #======================Wrappers to choose funcitons=========================================#    
-    # def get_episode_end_fn(self,key,quant_left,bestasks, bestbids, time, asks, bids, trades, state, params):
-    #     """
-    #     Wrapper function to call the appropriate episode end function.
-    #     """
-    #     if self.cfg.end_fn == "force_market_order":
-    #         return self.end_fn(key,quant_left,bestasks, bestbids, time, asks, bids, trades, state, params)
-    #     elif self.cfg.end_fn =="unwind_FT":
-    #         return self.end_fn(quant_left,bestasks, bestbids, time, asks, bids, trades, state, params)
-    #     else:
-    #         raise ValueError("Invalid end_fn specified.")
         
     def get_action(self,action, world_state, agent_state, agent_params):
         """
@@ -1713,6 +1589,25 @@ class ExecutionAgent():
         trade_duration = agent_state.trade_duration + trade_duration_step
         quant_left = agent_state.task_to_execute - agent_state.quant_executed - agentQuant
 
+        # ---------- Update VWAP tracking accumulators ----------
+        other_pq = (jnp.abs(otherTrades[:, job.cst.TradesFeat.Q.value]) *
+                    (otherTrades[:, job.cst.TradesFeat.P.value] // self.world_config.tick_size)).sum()
+        new_market_vwap_num = agent_state.market_vwap_num + other_pq
+        new_market_vwap_den = agent_state.market_vwap_den + otherQuant
+
+        # Compute cumulative market VWAP for tracking reward
+        cumul_market_vwap = jnp.where(
+            new_market_vwap_den > 0,
+            new_market_vwap_num / new_market_vwap_den,
+            agent_state.init_price / self.world_config.tick_size,
+        )
+        cumul_agent_avg = jnp.where(
+            (agent_state.total_revenue + QP_agent) > 0,
+            (agent_state.total_revenue + QP_agent) / (agent_state.quant_executed + agentQuant + 1e-9),
+            agent_state.init_price / self.world_config.tick_size,
+        )
+        adj_slippage_bps = (cumul_agent_avg - cumul_market_vwap) / (cumul_market_vwap + 1e-9) * 10000
+
         reward_info={
         "reward":reward,
         "agentQuant": agentQuant,
@@ -1728,6 +1623,9 @@ class ExecutionAgent():
         "doom_quant": doom_quant,
         "quant_left": quant_left,
         "trade_duration": trade_duration,
+        "market_vwap_num": new_market_vwap_num,
+        "market_vwap_den": new_market_vwap_den,
+        "adj_slippage_bps": adj_slippage_bps,
         }
 
         # jax.debug.callback(large_reward_callback,reward,jnp.abs(reward),trades,P_vwap,world_state.window_index,QP_agent,agentQuant)
@@ -1741,14 +1639,16 @@ class ExecutionAgent():
             reward_scaled = reward / self.cfg.reward_scaling_quo
 
 
+        if self.cfg.reward_function == "vwap_tracking":
+            # Penalize deviation from market VWAP in either direction
+            reward = -jnp.abs(cumul_agent_avg - cumul_market_vwap) * agentQuant
+            reward_scaled = reward / self.cfg.reward_scaling_quo
+
         if self.cfg.reward_function == "simplest_case":
             entry_price=agent_state.init_price
             price_slip=agentTrades[:,job.cst.TradesFeat.P.value]-jnp.ones_like(agentTrades[:,0])*entry_price #Trade price - 1st price.
             price_slip=jnp.where(agent_state.is_sell_task,price_slip,-price_slip)
             reward=jnp.dot(price_slip,jnp.abs(agentTrades[:,job.cst.TradesFeat.Q.value])) #Sum over (price slippage * quant executed at that price)
-            # This is exactly the same as slippage.
-            # From the abides paper.
-            # Can leave, but redundant.
             reward_scaled=reward/self.cfg.reward_scaling_quo
 
         
@@ -1793,7 +1693,9 @@ class ExecutionAgent():
             price_adv_rm = new_price_adv_rm,
             price_drift_rm = new_price_drift_rm,
             vwap_rm = new_vwap_rm,
-            trade_duration = new_trade_duration)
+            trade_duration = new_trade_duration,
+            market_vwap_num = extras["market_vwap_num"],
+            market_vwap_den = extras["market_vwap_den"])
         
         # Get done
         done = self.is_terminal(world_state, agent_state)
@@ -1826,6 +1728,7 @@ class ExecutionAgent():
             "doom_quant": doom_quant,
             "is_sell_task": agent_state.is_sell_task,
             "reward": new_reward,
+            "adj_slippage_bps": extras["adj_slippage_bps"],
         }
 
         def debug_info_callback(info):
@@ -2181,7 +2084,9 @@ class ExecutionAgent():
             return spaces.Discrete(self.cfg.n_actions)
         elif self.cfg.action_space=="twap":
             return spaces.Discrete(self.cfg.n_actions)
-        else:    
+        elif self.cfg.action_space=="execute_hold":
+            return spaces.Discrete(self.cfg.n_actions)
+        else:
             raise ValueError("Invalid action_space specified.")
 
     #FIXME: Obsevation space is a single array with hard-coded shape (based on get_obs function): make this better.
@@ -2206,227 +2111,6 @@ class ExecutionAgent():
         return NotImplementedError
 
 
-
-# def step_env(
-#         self, key: chex.PRNGKey, state: ExecEnvState, input_action: jax.Array, params: ExecEnvParams
-#     ) -> Tuple[chex.Array, ExecEnvState, float, bool, dict]:
-
-#         data_messages = self._get_data_messages(
-#             params.message_data,
-#             state.start_index,
-#             state.step_counter,
-#             state.init_time[0] + self.world_config.episode_time
-#         )
-    
-#         action = self._reshape_action(input_action, state, params,key)
-#         action_msgs = self.get_action(action, state, params)
-#         action_prices = action_msgs[:, 3]
-#         action_quants=action_msgs[:,2]
-#         #jax.debug.print('action_msgs\n {}', action_msgs)
-#         #jax.debug.print("bids:{}",state.bid_raw_orders)
-
-
-
-#         raw_order_side = jax.lax.cond(
-#             state.is_sell_task,
-#             lambda: state.ask_raw_orders,
-#             lambda: state.bid_raw_orders
-#         )
-#         cnl_msgs = job.getCancelMsgs(
-#             raw_order_side,
-#             agent_params.trader_id,
-#             self.cfg.num_action_messages_by_agent,
-#             1 - state.is_sell_task * 2,
-#             state.time[0],
-#             state.time[1]
-#         )
-        
-#         # net actions and cancellations at same price if new action is not bigger than cancellation
-#         action_msgs, cnl_msgs = self._filter_messages(action_msgs, cnl_msgs)
-#         #jax.debug.print('filtered action_msgs\n {}', action_msgs)
-#         #jax.debug.print("cln msgs:{}",cnl_msgs)
-        
-#         # Add to the top of the data messages
-#         total_messages = jnp.concatenate([cnl_msgs, action_msgs, data_messages], axis=0)
-#         # Save time of final message to add to state
-#         time = total_messages[-1, -2:]
-#         # To only ever consider the trades from the last step simply replace state.trades with an array of -1s of the same size. 
-#         trades_reinit = (jnp.ones((self.nTradesLogged, 8)) * -1).astype(jnp.int32)
-#         # Process messages of step (action+data) through the orderbook
-#         (asks, bids, trades), (bestbids, bestasks) = job.scan_through_entire_array_save_bidask(self.cfg, key,
-#             total_messages,
-#             (state.ask_raw_orders, state.bid_raw_orders, trades_reinit),
-#             # TODO: this returns bid/ask for last n_data_msg_per_step only, could miss the direct impact of actions
-#             self.n_data_msg_per_step + self.cfg.num_messages_by_agent
-#         )
-#         #
-#         jax.debug.print("new best bids before:{}",bestbids.shape)
-
-#         # If best price is not available in the current step, use the last available price
-#         # TODO: check if we really only want the most recent n_data_msg_per_step prices (+1 for the additional market order)
-#         bestasks, bestbids = (
-#             self._ffill_best_prices(
-#                 bestasks[-self.n_data_msg_per_step- self.cfg.num_messages_by_agent:],
-#                 state.best_asks[-1, 0]
-#             ),
-#             self._ffill_best_prices(
-#                 bestbids[-self.n_data_msg_per_step- self.cfg.num_messages_by_agent:],
-#                 state.best_bids[-1, 0]
-#             )
-#         )
-#         jax.debug.print("new best bids after:{}",bestbids.shape)
-#         # jax.debug.print('agent_id {}, trades {}', agent_params.trader_id, trades)
-#         # filter to trades by our agent (rest are 0s)
-
-#         agent_trades = job.get_agent_trades(trades, agent_params.trader_id)
-
-#         #jax.debug.print("Agent trades:{}", agent_trades)
-#        # jax.debug.print(" trades :{}", trades)
-        
-
-
-#         # executions = self._get_executed_by_level(agent_trades, action, state)
-#         executions = self._get_executed_by_action(agent_trades, action, state,action_prices)
-#         executions=jnp.abs(executions) #deal with the negative quants from trades
-    
-#         quant_executed_this_step = executions[:,1].sum()#sum the quants..
-#         #jax.debug.print("executions:{}",executions)
-
-#         quant_left = state.task_to_execute - (state.quant_executed + quant_executed_this_step)
-        
-#         # jax.debug.print('agent_trades\n {}', agent_trades[:30])
-#         #jax.debug.print('executions: {}', executions)
-#         #jax.debug.print(
-#         #     "quant_executed_this_step: {}, quant_left: {}, quant_executed_this_step {}",
-#         #     quant_executed_this_step, quant_left, quant_executed_this_step)
-
-#         # TODO: check if episode time is over and force market order if necessary
-#         (asks, bids, trades), (new_bestask, new_bestbid), new_id_counter, new_time, mkt_exec_quant, doom_quant = \
-#             self.get_episode_end_fn(key,
-#                 quant_left, bestasks[-1], bestbids[-1], time, asks, bids, trades, state, params)
-
-#         #bestasks = jnp.concatenate([bestasks, jnp.resize(new_bestask, (1, 2))], axis=0, dtype=jnp.int32)
-#         #bestbids = jnp.concatenate([bestbids, jnp.resize(new_bestbid, (1, 2))], axis=0, dtype=jnp.int32)
-
-#         jax.debug.print("bestasks after2:{}",bestasks.shape)
-#         #jax.debug.print("bestasks\n {}", bestasks)
-        
-
-
-#         # TODO: consider adding quantity before (in priority) to each price / level
-
-#         # TODO: use the agent quant identification from the separate function _get_executed_by_level instead of _get_reward
-#         reward, extras = self._get_reward(state, params, trades)
-#         quant_executed = state.quant_executed + extras["agentQuant"]
-#         # CAVE: uses seconds only (not ns)
-#         trade_duration_step = (jnp.abs(agent_trades[:, 1]) / state.task_to_execute * (agent_trades[:, -2] - state.init_time[0])).sum()
-#         trade_duration = state.trade_duration + trade_duration_step
-#         # jax.debug.print('trade_duration_step: {}, trade_duration: {}', trade_duration_step, trade_duration)
-#         # jax.debug.print('left before mkt: {}, left after mkt {}', quant_left, state.task_to_execute - state.quant_executed - extras["agentQuant"])
-#         state = ExecEnvState(
-#             prev_action = jnp.vstack([action_prices, action_quants]).T,  # includes prices and quantitites  
-#             prev_executed = executions[:,1],#just the quants to keep same setup  
-#             ask_raw_orders = asks,
-#             bid_raw_orders = bids,
-#             trades = trades,
-#             init_time = state.init_time,
-#             # time = time,
-#             time = new_time,
-#             # customIDcounter = state.customIDcounter + self.cfg.n_actions + 1,
-#             customIDcounter = new_id_counter,
-#             window_index = state.window_index,
-#             step_counter = state.step_counter + 1,
-#             max_steps_in_episode = state.max_steps_in_episode,
-#             start_index = state.start_index,
-#             best_asks = bestasks,
-#             best_bids = bestbids,
-#             init_price = state.init_price,
-#             task_to_execute = state.task_to_execute,
-#             quant_executed = quant_executed,
-#             total_revenue = state.total_revenue + extras["revenue"],
-#             drift_return = state.drift_return + extras["drift"],
-#             advantage_return = state.advantage_return + extras["advantage"],
-#             slippage_rm = extras["slippage_rm"],
-#             price_adv_rm = extras["price_adv_rm"],
-#             price_drift_rm = extras["price_drift_rm"],
-#             vwap_rm = extras["vwap_rm"],
-#             is_sell_task = state.is_sell_task,
-#             trade_duration = trade_duration,
-#             delta_time = new_time[0] + new_time[1]/1e9 - state.time[0] - state.time[1]/1e9,
-#         )
-#         done = self.is_terminal(state, params)
-#         if self.cfg.debug_mode==False:
-#             info = {
-#             "window_index": state.window_index,
-#             "total_revenue": state.total_revenue,
-#             "quant_executed": state.quant_executed,
-#             "task_to_execute": state.task_to_execute,
-#             "average_price": jnp.nan_to_num(state.total_revenue 
-#                                             / state.quant_executed, 0.0),
-#             "mid_price":((state.best_bids[:, 0] + state.best_asks[:, 0]) // 2).mean(),
-#             "current_step": state.step_counter,
-#             "done": done,
-#             "window_index": state.window_index,
-#             "reward_lam1":extras["reward_lam1"],
-#             "slippage_rm": state.slippage_rm,
-#             "price_adv_rm": state.price_adv_rm,
-#             "price_drift_rm": state.price_drift_rm,
-#             "vwap_rm": state.vwap_rm,
-#             "advantage_reward": state.advantage_return,
-#             "drift_reward": state.drift_return,
-#             "trade_duration": state.trade_duration,
-#             "mkt_forced_quant": mkt_exec_quant + doom_quant,
-#             "doom_quant": doom_quant,
-#             "drift":extras["drift"],
-#             "is_sell_task": state.is_sell_task,
-#             }
-#         if self.cfg.debug_mode==True:
-
-#             lob_state = job.get_L2_state(
-#                                 state.ask_raw_orders,  # Current ask orders
-#                                 state.bid_raw_orders,  # Current bid orders
-#                                 10,  # Number of levels
-#                                 self.cfg  
-#                                 )
-#             info={
-#                 "trades":trades,
-#                 "total_msgs":total_messages,
-#                 "lob_state":lob_state,
-#             "window_index": state.window_index,
-#             "total_revenue": state.total_revenue,
-#             "quant_executed": state.quant_executed,
-#             "task_to_execute": state.task_to_execute,
-#             "average_price": jnp.nan_to_num(state.total_revenue 
-#                                             / state.quant_executed, 0.0),
-#             "mid_price":((state.best_bids[:, 0] + state.best_asks[:, 0]) // 2).mean(),
-#             "current_step": state.step_counter,
-#             "done": done,
-#             "window_index": state.window_index,
-#             "reward_lam1":extras["reward_lam1"],
-#             "slippage_rm": state.slippage_rm,
-#             "price_adv_rm": state.price_adv_rm,
-#             "price_drift_rm": state.price_drift_rm,
-#             "vwap_rm": state.vwap_rm,
-#             "advantage_reward": state.advantage_return,
-#             "drift_reward": state.drift_return,
-#             "trade_duration": state.trade_duration,
-#             "mkt_forced_quant": mkt_exec_quant + doom_quant,
-#             "doom_quant": doom_quant,
-#             "drift":extras["drift"],
-#             "is_sell_task": state.is_sell_task,
-#             }
-
-#         return self.get_observation(state, params), state, reward, done, info
-
-
-    
-    
-
-# ============================================================================= #
-# ============================================================================= #
-# ================================== MAIN ===================================== #
-# ============================================================================= #
-# ============================================================================= #
 
 
 if __name__ == "__main__":

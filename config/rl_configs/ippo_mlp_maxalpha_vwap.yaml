@@ -1,0 +1,39 @@
+# MLP-based IPPO for VWAP benchmark tracking (maxalpha)
+# Uses ActorCriticMLP instead of ActorCriticRNN
+
+"LR": [0.0001]
+"NUM_ENVS": 2048
+"NUM_STEPS": 126
+"NUM_STEPS_EVAL": 63
+"GRU_HIDDEN_DIM": 128
+"FC_DIM_SIZE": 128
+"TOTAL_TIMESTEPS": 2e7
+"UPDATE_EPOCHS": 8
+"NUM_MINIBATCHES": 8
+"GAMMA": [0.99]
+"GAE_LAMBDA": [0.9999]
+"CLIP_EPS": 0.2
+"SCALE_CLIP_EPS": [False]
+"ENT_COEF": [0.001]
+"VF_COEF": [5e-5]
+"MAX_GRAD_NORM": [0.5]
+"ACTIVATION": ["relu"]
+"ENV_NAME": "JAXMARL-SingleExec-v0"
+"NUM_AGENTS_PER_TYPE": [1]
+"SEED": 42
+"N_DEVICES": 1
+"ENV_CONFIG": "config/env_configs/exec_maxalpha_vwap.json"
+"ANNEAL_LR": [False]
+"NETWORK_TYPE": "mlp"
+
+# WandB Params
+"ENTITY": "richjames0"
+"PROJECT": "vwap_tracking_rl"
+"WANDB_MODE": "online"
+
+# High-Level Params
+"CALC_EVAL": True
+"TimePeriod": "2012-06-21"
+"EvalTimePeriod": "2012-06-21"
+"Calculate Baseline": False
+"Timing": False

@@ -27,7 +27,7 @@
 "ANNEAL_LR": [False]
 
 # WandB Params
-"ENTITY": "your-wandb-entity"
+"ENTITY": "richjames0"
 "PROJECT": "v4_Exec_FixedQuantsComplex_Ablations" #"v4_2Player_reference_price_ablation" #"DEBUG"
 "WANDB_MODE" : "online"
 
@@ -92,8 +92,8 @@ SWEEP_PARAMETERS:
 
 # High-Level Params
 "CALC_EVAL" : True
-"TimePeriod" : "2024"
-"EvalTimePeriod" : "2024_Dec"
+"TimePeriod" : "2012"
+"EvalTimePeriod" : "2012"
 "Calculate Baseline" : False
 "Timing" : False
 

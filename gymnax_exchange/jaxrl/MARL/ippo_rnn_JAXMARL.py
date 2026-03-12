@@ -37,6 +37,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import gc
 from dataclasses import replace,fields
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 #from jaxmarl.wrappers.baselines import SMAXLogWrapper
 #from jaxmarl.environments.smax import map_name_to_scenario, HeuristicEnemySMAX
@@ -256,6 +257,49 @@ class ActorCriticRNN(nn.Module):
         return hidden, pi, jnp.squeeze(critic, axis=-1)
 
 
+class ActorCriticMLP(nn.Module):
+    """MLP actor-critic with separate actor and critic networks (no shared trunk).
+    Maintains the same call signature as ActorCriticRNN for drop-in compatibility:
+    hidden state is accepted but passed through unchanged.
+
+    Handles both single-step (1, batch, obs_dim) and multi-step (T, batch, obs_dim)
+    inputs by processing all timesteps independently through the same MLP.
+    """
+    action_dim: Sequence[int]
+    config: Dict
+
+    @nn.compact
+    def __call__(self, hidden, x):
+        obs, dones = x
+        # obs shape: (T, batch, obs_dim) — process all timesteps through MLP
+
+        # Actor path
+        actor = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(jnp.sqrt(2)), bias_init=constant(0.0))(obs)
+        actor = nn.relu(actor)
+        actor = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(jnp.sqrt(2)), bias_init=constant(0.0))(actor)
+        actor = nn.relu(actor)
+
+        action_dim = self.action_dim
+        if isinstance(action_dim, (list, tuple)) and len(action_dim) == 1:
+            action_dim = action_dim[0]
+
+        if isinstance(action_dim, int):
+            pi = SingleActionOutput(action_dim=action_dim, config=self.config)(actor)
+        elif isinstance(action_dim, (list, tuple)):
+            pi = MultiActionOutputIndependant(action_dims=action_dim, config=self.config)(actor)
+        else:
+            raise ValueError("action_dim must be int or list/tuple for ActorCriticMLP.")
+
+        # Critic path (separate network)
+        critic = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(jnp.sqrt(2)), bias_init=constant(0.0))(obs)
+        critic = nn.relu(critic)
+        critic = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(jnp.sqrt(2)), bias_init=constant(0.0))(critic)
+        critic = nn.relu(critic)
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
+
+        return hidden, pi, jnp.squeeze(critic, axis=-1)
+
+
 class MultiCategorical():
     """Wrapper for multiple independent categorical distributions.
     NOTE: The correct thing would be to let it inherit from distrax.Distribution but
@@ -433,8 +477,14 @@ def create_agent_configs(config):
     return agent_configs
 
 
-def make_train(config):
-    # scenario = map_name_to_scenario(config["MAP_NAME"])
+def make_train(config, warmstart_params=None):
+    """Create training function.
+
+    Args:
+        config: Training configuration dict
+        warmstart_params: Optional dict mapping agent index to param dict to use
+                         for warmstarting network weights (e.g. from BC checkpoint)
+    """
     init_key = jax.random.PRNGKey(config["SEED"])
     # Create a MultiAgentConfig object with parameters from the config
     print ("Overriding the Agent config objects with the variable from the sweep parameters.")
@@ -521,8 +571,10 @@ def make_train(config):
         num_agents_of_instance_list = []
         init_dones_agents = []
         for i, instance in enumerate(env.instance_list):
-            # print("Action space dimension for network i ",env.action_spaces[i].n)
-            network = ActorCriticRNN(env.action_spaces[i].n, config=config)
+            if config.get("NETWORK_TYPE", "rnn") == "mlp":
+                network = ActorCriticMLP(env.action_spaces[i].n, config=config)
+            else:
+                network = ActorCriticRNN(env.action_spaces[i].n, config=config)
             rng, _rng = jax.random.split(rng)
             init_x = (
                 jnp.zeros(
@@ -545,6 +597,11 @@ def make_train(config):
                     optax.clip_by_global_norm(config["MAX_GRAD_NORM"][i]),
                     optax.adam(config["LR"][i], eps=1e-5),
                 )
+            # Apply warmstart params if provided for this agent index
+            if warmstart_params is not None and i in warmstart_params:
+                print(f"Applying warmstart params for agent type {i}")
+                network_params = warmstart_params[i](network_params)
+
             train_state = TrainState.create(
                 apply_fn=network.apply,
                 params=network_params,
@@ -567,7 +624,16 @@ def make_train(config):
             eval_env_params=eval_env.default_params # type: ignore
         else:
             eval_env_params = None
-        # env_params=jax.device_put(env_params)
+        # Multi-device setup
+        devices = jax.devices()
+        n_devices = len(devices)
+        mesh = Mesh(np.array(devices), axis_names=('batch',))
+        batch_sharding = NamedSharding(mesh, P('batch'))
+        replicated_sharding = NamedSharding(mesh, P())
+        assert config["NUM_ENVS"] % n_devices == 0, \
+            f"NUM_ENVS ({config['NUM_ENVS']}) must be divisible by number of devices ({n_devices})"
+        print(f"Multi-device: {n_devices} device(s) detected, sharding {config['NUM_ENVS']} envs across them")
+
         obsv, env_state = jax.vmap(env.reset, in_axes=(0,None))(reset_rng,env_params)
         # TRAIN LOOP
         
@@ -1073,6 +1139,24 @@ def make_train(config):
             return (runner_state, update_steps), metrics
 
         rng, _rng = jax.random.split(rng)
+
+        # Shard batch-dimension data across devices, replicate params/rng
+        def shard_batch(x):
+            return jax.device_put(x, batch_sharding)
+        def replicate(x):
+            return jax.device_put(x, replicated_sharding)
+
+        env_state = jax.tree.map(shard_batch, env_state)
+        obsv = jax.tree.map(shard_batch, obsv)
+        hstates = [shard_batch(h) for h in hstates]
+        init_dones_agents = [shard_batch(d) for d in init_dones_agents]
+
+        train_states = [jax.tree.map(replicate, ts) for ts in train_states]
+        env_params = jax.tree.map(replicate, env_params)
+        if eval_env_params is not None:
+            eval_env_params = jax.tree.map(replicate, eval_env_params)
+        _rng = replicate(_rng)
+
         runner_state = (
             train_states,
             env_state,
@@ -1087,7 +1171,7 @@ def make_train(config):
 
         checkpoint_dir=f'{config["world_config"]["alphatradePath"]}/checkpoints/MARLCheckpoints/{config["PROJECT"]}/{(run.name if run.name else run.id) if run else "GENERIC_RUN"}'
         orbax_checkpointer = oxcp.PyTreeCheckpointer()
-        options = oxcp.CheckpointManagerOptions(max_to_keep=2, create=True,keep_period=config["NUM_UPDATES"]//2)
+        options = oxcp.CheckpointManagerOptions(max_to_keep=2, create=True,keep_period=max(1, config["NUM_UPDATES"]//2))
         checkpoint_manager = oxcp.CheckpointManager(
              checkpoint_dir, orbax_checkpointer, options
                 )
@@ -1106,6 +1190,11 @@ def make_train(config):
             #     jax.block_until_ready((runner_state,updates,metrics))
             #     jax.profiler.stop_trace()
             print(f"Update step {updates} completed")
+            if i == 0 and n_devices > 1:
+                sample_param = jax.tree.leaves(runner_state[0][0].params)[0]
+                sample_obs = jax.tree.leaves(runner_state[2])[0]
+                print(f"Param sharding: {sample_param.sharding}")
+                print(f"Obs sharding: {sample_obs.sharding}")
             if config["CALC_EVAL"]:
                 ckpt = {
                     'model': runner_state[0],  # train_states
