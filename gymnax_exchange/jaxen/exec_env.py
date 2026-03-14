@@ -175,6 +175,8 @@ class ExecutionAgent():
             self.observation_fn = self._get_obs_basic
         elif self.cfg.observation_space == "simplest_case":
             self.observation_fn = self._get_obs_simplest_case
+        elif self.cfg.observation_space == "vwap_engineered":
+            self.observation_fn = self._get_obs_vwap_engineered
         else:
             raise ValueError("Invalid observation_space specified.")
 
@@ -1201,13 +1203,18 @@ class ExecutionAgent():
                                        normalize=normalize,
                                        flatten=flatten)
         elif self.cfg.observation_space == "simplest_case":
-            return self.observation_fn(world_state=world_state, 
-                                       agent_state=agent_state, 
+            return self.observation_fn(world_state=world_state,
+                                       agent_state=agent_state,
+                                       normalize=normalize,
+                                       flatten=flatten)
+        elif self.cfg.observation_space == "vwap_engineered":
+            return self.observation_fn(agent_state=agent_state,
+                                       world_state=world_state,
                                        normalize=normalize,
                                        flatten=flatten)
         else:
             raise ValueError("Invalid observation_space specified.")
-        
+
 
 
 
@@ -1982,6 +1989,119 @@ class ExecutionAgent():
         return obs
 
 
+    def _get_obs_vwap_engineered(
+            self,
+            agent_state: ExecEnvState,
+            world_state: WorldState,
+            normalize: bool,
+            flatten: bool = True,
+        ) -> chex.Array:
+        """Observation matching the BC (behavior cloning) feature layout.
+
+        Returns 15 features in fixed order (not dict-based, so no ravel_pytree
+        reordering). Normalization matches maxalpha/core/normalize.py exactly.
+
+        Features (indices):
+          0  mid_price
+          1  spread
+          2  spread_pct
+          3  best_bid_size
+          4  best_ask_size
+          5  imbalance_best  (bid-ask)/(bid+ask) at best level
+          6  total_bid_volume
+          7  total_ask_volume
+          8  imbalance       (total bid-ask)/(total bid+ask)
+          9  weighted_mid_price
+         10  remaining_pct   remaining_qty / task_size
+         11  time_remaining_pct  time_remaining / episode_time
+         12  execution_progress  executed / task_size
+         13  num_batches / 50
+         14  volume_progress  (time-based proxy: 1 - time_remaining_pct)
+        """
+        best_bid_price = world_state.best_bids[-1][0]
+        best_ask_price = world_state.best_asks[-1][0]
+        best_bid_size = world_state.best_bids[-1][1]
+        best_ask_size = world_state.best_asks[-1][1]
+
+        mid_price = (best_ask_price + best_bid_price) / 2.0
+        spread = best_ask_price - best_bid_price
+        spread_pct = jnp.where(mid_price > 0, spread / mid_price, 0.0)
+
+        total_best = best_bid_size + best_ask_size
+        imbalance_best = jnp.where(total_best > 0,
+            (best_bid_size - best_ask_size) / total_best, 0.0)
+
+        total_bid_volume = job.get_volume(world_state.bid_raw_orders)
+        total_ask_volume = job.get_volume(world_state.ask_raw_orders)
+
+        total_volume = total_bid_volume + total_ask_volume
+        imbalance = jnp.where(total_volume > 0,
+            (total_bid_volume - total_ask_volume) / total_volume, 0.0)
+
+        weighted_mid_price = jnp.where(total_best > 0,
+            (best_bid_price * best_ask_size + best_ask_price * best_bid_size) / total_best,
+            mid_price)
+
+        # Execution state features
+        task_size = jnp.float32(agent_state.task_to_execute)
+        executed = jnp.float32(agent_state.quant_executed)
+        remaining_pct = jnp.where(task_size > 0, (task_size - executed) / task_size, 0.0)
+        execution_progress = jnp.where(task_size > 0, executed / task_size, 1.0)
+
+        time = world_state.time[0] + world_state.time[1] / 1e9
+        time_elapsed = time - (world_state.init_time[0] + world_state.init_time[1] / 1e9)
+        episode_time = self.world_config.episode_time
+        time_remaining_pct = jnp.where(episode_time > 0,
+            (episode_time - time_elapsed) / episode_time, 0.0)
+
+        num_batches = jnp.where(self.cfg.fixed_quant_value > 0,
+            jnp.ceil(task_size / self.cfg.fixed_quant_value), 1.0)
+
+        # Build raw obs array in exact BC feature order
+        raw_obs = jnp.array([
+            mid_price,           # 0
+            spread,              # 1
+            spread_pct,          # 2
+            best_bid_size,       # 3
+            best_ask_size,       # 4
+            imbalance_best,      # 5
+            total_bid_volume,    # 6
+            total_ask_volume,    # 7
+            imbalance,           # 8
+            weighted_mid_price,  # 9
+            remaining_pct,       # 10
+            time_remaining_pct,  # 11
+            execution_progress,  # 12
+            num_batches / 50.0,  # 13 (same scale as BC)
+            1.0 - time_remaining_pct,  # 14 (volume_progress: time-based proxy)
+        ], dtype=jnp.float32)
+
+        if normalize:
+            # Match maxalpha/core/normalize.py exactly
+            scales = jnp.array([
+                20_000_000.0,  # mid_price
+                500.0,         # spread
+                1.0,           # spread_pct (handled specially)
+                500.0,         # best_bid_size
+                500.0,         # best_ask_size
+                1.0,           # imbalance_best
+                2000.0,        # total_bid_volume
+                2000.0,        # total_ask_volume
+                1.0,           # imbalance
+                20_000_000.0,  # weighted_mid_price
+                1.0,           # remaining_pct
+                1.0,           # time_remaining_pct
+                1.0,           # execution_progress
+                1.0,           # num_batches/50 (already scaled)
+                1.0,           # volume_progress
+            ], dtype=jnp.float32)
+            obs = raw_obs / scales
+            # Special handling: spread_pct gets multiplied by 10000 instead of divided
+            obs = obs.at[2].set(raw_obs[2] * 10000.0)
+        else:
+            obs = raw_obs
+
+        return obs
 
 
     def _get_obs_full(self, state: ExecEnvState, params:ExecEnvParams) -> chex.Array:
@@ -2101,7 +2221,10 @@ class ExecutionAgent():
                 space = spaces.Box(-10000, 10000, (12,), dtype=jnp.float32) 
             return space
         elif self.cfg.observation_space == "simplest_case":
-            space = spaces.Box(-10000, 10000, (3,), dtype=jnp.float32) 
+            space = spaces.Box(-10000, 10000, (3,), dtype=jnp.float32)
+            return space
+        elif self.cfg.observation_space == "vwap_engineered":
+            space = spaces.Box(-10000, 10000, (15,), dtype=jnp.float32)
             return space
         else:
             raise ValueError("Invalid observation_space specified.")

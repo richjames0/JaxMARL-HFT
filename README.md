@@ -24,6 +24,14 @@ pip install -r requirements.txt
 
 Requires Python 3.8+ and a CUDA-capable GPU.
 
+#### NVIDIA Grace Hopper / DGX Spark (sm_121)
+
+The orthogonal weight initializer (used by default in actor/critic networks and GRU cells) relies on cuSolver's QR decomposition, which is broken on sm_121 GPUs. Set this environment variable before training to replace it with `lecun_normal`:
+
+```bash
+export JAXMARL_PATCH_ORTHOGONAL=1
+```
+
 ### 2. Get LOBSTER data
 
 You need [LOBSTER](https://data.lobsterdata.com/info/WhatIsLOBSTER.php) limit order book data. Each trading day needs a matched pair of `message` and `orderbook` CSV files.

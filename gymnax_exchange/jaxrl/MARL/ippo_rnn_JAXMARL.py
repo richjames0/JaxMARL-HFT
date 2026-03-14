@@ -27,7 +27,19 @@ import jax.numpy as jnp # type: ignore
 import flax.linen as nn
 import numpy as np
 import optax
-from flax.linen.initializers import constant, orthogonal # type: ignore
+from flax.linen.initializers import constant, orthogonal, lecun_normal # type: ignore
+
+# cuSolver (used by orthogonal/QR) is broken on sm_121 (DGX Spark GB10).
+# Set JAXMARL_PATCH_ORTHOGONAL=1 to replace orthogonal init with lecun_normal.
+if os.environ.get("JAXMARL_PATCH_ORTHOGONAL", "") == "1":
+    def orthogonal(scale=1.0):
+        return lecun_normal()
+
+    # Patch Flax GRUCell to avoid its internal orthogonal recurrent_kernel_init
+    _OrigGRUCell = nn.GRUCell
+    class _PatchedGRUCell(_OrigGRUCell):
+        recurrent_kernel_init: nn.initializers.Initializer = lecun_normal()
+    nn.GRUCell = _PatchedGRUCell
 from typing import Sequence, NamedTuple, Any, Dict
 from flax.training.train_state import TrainState
 from flax.training import orbax_utils
@@ -823,10 +835,16 @@ def make_train(config, warmstart_params=None):
                             approx_kl = ((ratio - 1) - logratio).mean()
                             clip_frac = jnp.mean(jnp.abs(ratio - 1) > config["CLIP_EPS"])
 
+                            # Scale out actor loss during freeze period so only
+                            # critic gradients flow (actor/critic are separate paths)
+                            actor_freeze_steps = config.get("ACTOR_FREEZE_STEPS", 0)
+                            actor_scale = jnp.where(
+                                update_steps < actor_freeze_steps, 0.0, 1.0
+                            )
                             total_loss = (
-                                loss_actor
+                                actor_scale * loss_actor
                                 + config["VF_COEF"][i] * value_loss
-                                - config["ENT_COEF"][i] * entropy
+                                - actor_scale * config["ENT_COEF"][i] * entropy
                             )
                             return total_loss, (value_loss, loss_actor, entropy, ratio, approx_kl, clip_frac)
 
