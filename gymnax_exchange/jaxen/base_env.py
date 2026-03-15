@@ -246,12 +246,12 @@ class BaseLOBEnv(environment.Environment):
         time=jnp.array(first_message[-2:])
         #Get initial orders (2xNdepth)x6 based on the initial L2 orderbook for this window 
         def get_initial_orders(book_data,time):
-            orderbookLevels=10
+            orderbookLevels=self.cfg.book_depth
             initid=self.cfg.init_id
             #jax.debug.print("\n=== Debug Order Book Initialization ===")
             #jax.debug.print("Raw book_data shape: {}", book_data.shape)
             #jax.debug.print("Raw book_data: {}", book_data)
-            data=jnp.array(book_data).reshape(int(10*2),2)
+            data=jnp.array(book_data).reshape(int(orderbookLevels*2),2)
             #jax.debug.print("\nReshaped data: {}", data)
             newarr = jnp.zeros((int(orderbookLevels*2),8),dtype=jnp.int32)
             initOB = newarr \
