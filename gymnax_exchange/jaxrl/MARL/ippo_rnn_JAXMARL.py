@@ -1188,15 +1188,22 @@ def make_train(config, warmstart_params=None):
         
 
         checkpoint_dir=f'{config["world_config"]["alphatradePath"]}/checkpoints/MARLCheckpoints/{config["PROJECT"]}/{(run.name if run.name else run.id) if run else "GENERIC_RUN"}'
+        best_checkpoint_dir = checkpoint_dir + "_best"
         orbax_checkpointer = oxcp.PyTreeCheckpointer()
         options = oxcp.CheckpointManagerOptions(max_to_keep=2, create=True,keep_period=max(1, config["NUM_UPDATES"]//2))
         checkpoint_manager = oxcp.CheckpointManager(
              checkpoint_dir, orbax_checkpointer, options
                 )
+        best_checkpointer = oxcp.PyTreeCheckpointer()
+        best_checkpoint_manager = oxcp.CheckpointManager(
+             best_checkpoint_dir, best_checkpointer,
+             oxcp.CheckpointManagerOptions(max_to_keep=1, create=True)
+                )
         print("Saving checkpoints to directory: \n \t",checkpoint_dir)
+        print("Best checkpoint directory: \n \t",best_checkpoint_dir)
 
+        best_eval_reward = float('-inf')
 
-        
         updates=0
         for i in range(config["NUM_UPDATES"]):
             print(f"Starting Update step {i+1}/{config['NUM_UPDATES']}")
@@ -1222,6 +1229,13 @@ def make_train(config, warmstart_params=None):
                         'eval_rewards': metrics["avg_reward_eval"],
                         }
                 }
+                # Save best model by eval reward
+                eval_reward = float(jnp.mean(jnp.stack(metrics["avg_reward_eval"])))
+                if eval_reward > best_eval_reward:
+                    best_eval_reward = eval_reward
+                    print(f"New best eval reward: {best_eval_reward:.6f} at update {updates}")
+                    save_args = orbax_utils.save_args_from_target(ckpt)
+                    best_checkpoint_manager.save(updates, ckpt, save_kwargs={"save_args": save_args})
             else:
                 ckpt = {
                     'model': runner_state[0],  # train_states
@@ -1235,9 +1249,11 @@ def make_train(config, warmstart_params=None):
             checkpoint_manager.save(updates, ckpt, save_kwargs={"save_args": save_args})
             del metrics
             gc.collect()
-        
+
 
         checkpoint_manager.wait_until_finished()
+        best_checkpoint_manager.wait_until_finished()
+        print(f"Training complete. Best eval reward: {best_eval_reward:.6f}")
 
         # runner_state, metrics = jax.lax.scan(
         #     _update_step, (runner_state, 0), None, config["NUM_UPDATES"]
